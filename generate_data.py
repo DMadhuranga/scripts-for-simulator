@@ -20,6 +20,11 @@ def osmnx_routing_graph(city_center,radius):
                             simplify=True,
                             truncate_by_edge=True,
                             retain_all=False)
+    # G = ox.graph_from_bbox(north=35.4333303354069, south=34.98355788426319, east=-84.9464023036812, west=-85.408215,
+    #                         network_type='drive',
+    #                         simplify=True,
+    #                         truncate_by_edge=True,
+    #                         retain_all=False)
     G = ox.utils_graph.get_largest_component(G, strongly=True)
 
     # add edge speeds
@@ -68,8 +73,22 @@ def create_directory(directory_path):
     if not os.path.exists(directory_path):
         os.makedirs(directory_path)
 
+def read_matrix(filename,num_lines):
+    delimiter = ','
+    dtype = np.uint16
+    def iter_func():
+        with open(filename, 'r') as infile:
+            for line in infile:
+                line = line.rstrip().split(delimiter)
+                for item in line:
+                    yield dtype(item)
+
+    data = np.fromiter(iter_func(), dtype=dtype)
+    data = data.reshape((-1, num_lines))
+    return data
+
 def generateMap(G,nodes,edges,main_directory):
-    OUTPUT_DIR = main_directory+"map/"
+    OUTPUT_DIR = main_directory+"map/"+radius_in_km
     create_directory(OUTPUT_DIR)
 
     node_to_osmid_map = {}
@@ -97,8 +116,14 @@ def generateMap(G,nodes,edges,main_directory):
                     predecessors.append(predecessor)
                 pred_file.write(",".join([str(i) for i in predecessors])+"\n")
                 times_file.write(",".join([str(i) for i in travel_times])+"\n")
-                break
 
+    times = read_matrix(OUTPUT_DIR+'times.csv',len(nodes))
+    with open(OUTPUT_DIR +"times.npy", 'wb') as f:
+        np.save(f, times)
+
+    pred = read_matrix(OUTPUT_DIR+'pred.csv',len(nodes))
+    with open(OUTPUT_DIR +"pred.npy", 'wb') as f:
+        np.save(f, pred)
     # predecessors = np.genfromtxt(OUTPUT_DIR+'pred.csv', delimiter=',', dtype=np.int16)
     # with open(OUTPUT_DIR+"distance.csv", 'a+') as dist_file:
     #     for origin in range(1,len(nodes)+1):
@@ -137,31 +162,32 @@ def generateVehicles(nodes,vehicle_num,vehicle_capacity,main_directory):
     for n in start_node:
         vehicles = vehicles.append(nodes.iloc[n], ignore_index=True)
 
-    vehicles.columns = ['node id', 'node lat', 'node lon']
-    vehicles['vehicle id'] = list(range(1, vehicle_num+1))
-    vehicles['start time'] = datetime.time(0,0,0)
+    vehicles.columns = ['node', 'lat', 'lon']
+    vehicles['id'] = list(range(1, vehicle_num+1))
+    vehicles['start_time'] = datetime.time(0,0,0)
     vehicles['capacity'] = vehicle_capacity
 
     # formatting
-    vehicles['node id'] = vehicles['node id'].astype('int')
-    vehicles = vehicles[['vehicle id', 'node id', 'node lat', 'node lon', 'start time', 'capacity']]
-    vehicle_directory = main_directory + "vehicles/"
+    vehicles['node'] = vehicles['node'].astype('int')
+    vehicles = vehicles[['id', 'node', 'lat', 'lon', 'start_time', 'capacity']]
+    vehicle_directory = main_directory + "vehicles/"+radius_in_km
     create_directory(vehicle_directory)
-    vehicles.to_csv(vehicle_directory+'vehicles.csv', index = False, header = False)
+    vehicles.to_csv(vehicle_directory+'vehicles.csv', index = False)
 
 
 def extract_requests_from_lodes_data(cutoff,center,block_file_path,lodes_file_path,main_directory):
-    request_directory = main_directory+"requests/"
+    request_directory = main_directory+"requests/"+radius_in_km
     create_directory(request_directory)
     ma_blocks = gpd.read_file(block_file_path)
+    ma_blocks.GEOID20 = ma_blocks.GEOID20.astype(int)
 
     ma_lodes = pd.read_csv(lodes_file_path).rename(columns = {'S000':'total_jobs'})
-    ma_lodes.w_geocode = ma_lodes.w_geocode.astype(str)
-    ma_lodes.h_geocode = ma_lodes.h_geocode.astype(str)
-    ma_lodes = ma_lodes.groupby(['h_geocode', 'w_geocode']).agg(total_jobs=('total_jobs', sum)).reset_index().merge(ma_blocks[['GEOID10', 'geometry']], left_on='h_geocode', right_on='GEOID10').rename({'geometry':'home_geom'}, axis=1).drop('GEOID10', axis=1).merge(ma_blocks[['GEOID10', 'geometry']], left_on='w_geocode', right_on='GEOID10').rename({'geometry':'work_geom'}, axis=1).drop('GEOID10', axis=1).sort_values('total_jobs', ascending=False).reset_index(drop=True)
+    # ma_lodes.w_geocode = ma_lodes.w_geocode.astype(str)
+    # ma_lodes.h_geocode = ma_lodes.h_geocode.astype(str)
+    ma_lodes = ma_lodes.groupby(['h_geocode', 'w_geocode']).agg(total_jobs=('total_jobs', sum)).reset_index().merge(ma_blocks[['GEOID20', 'geometry']], left_on='h_geocode', right_on='GEOID20').rename({'geometry':'home_geom'}, axis=1).drop('GEOID20', axis=1).merge(ma_blocks[['GEOID20', 'geometry']], left_on='w_geocode', right_on='GEOID20').rename({'geometry':'work_geom'}, axis=1).drop('GEOID20', axis=1).sort_values('total_jobs', ascending=False).reset_index(drop=True)
 
     with open(request_directory+"temp_requests.csv", 'a+') as req_file:
-        req_file.write("id,pickup_longitude,pickup_latitude,dropoff_longitude,dropoff_latitude")
+        req_file.write("id,pickup_longitude,pickup_latitude,dropoff_longitude,dropoff_latitude\n")
         id = 0
         for _,row in ma_lodes.iterrows():
             total_jobs = row.total_jobs
@@ -181,18 +207,17 @@ def extract_requests_from_lodes_data(cutoff,center,block_file_path,lodes_file_pa
         print("Saved temp requests")
 
 def generate_requests(G,nodes,main_directory):
-
-    osmid_to_nodeid = {}
+    osmid_to_node_map = {}
     for _,node in nodes.iterrows():
-        osmid_to_nodeid[node.osmid] = int(node.node_id)
-    request_directory = main_directory+"requests/"
+        osmid_to_node_map[node.osmid] = int(node.node_id)
+    request_directory = main_directory+"requests/"+radius_in_km
     create_directory(request_directory)
     requests = pd.read_csv(request_directory+"temp_requests.csv")
     no_of_requests = requests.shape[0]
     time_gap = 7200/no_of_requests
     id = 1
     starting_time = datetime.datetime(year=2023,month=3,day=28,hour=6,minute=0,second=0)
-    with open(main_directory+"requests/requests_10km.csv", 'a+') as req_file:
+    with open(request_directory+"requests.csv", 'a+') as req_file:
         req_file.write("id,tpep_pickup_datetime,pickup_longitude,pickup_latitude,dropoff_longitude,dropoff_latitude,origin,dest\n")
         for _,row in requests.iterrows():
             new_time = starting_time + datetime.timedelta(seconds=int(time_gap*id))
@@ -206,8 +231,8 @@ def generate_requests(G,nodes,main_directory):
         for _,row in requests.iterrows():
             new_time = starting_time + datetime.timedelta(seconds=int(time_gap*(id-no_of_requests)))
             time_str = new_time.strftime("%Y-%m-%d %H:%M:%S")
-            ori_lon,ori_lat,origin = row.pickup_longitude, row.pickup_latitude
-            des_lon,des_lat,dest = row.dropoff_longitude, row.dropoff_latitude
+            ori_lon,ori_lat = row.pickup_longitude, row.pickup_latitude
+            des_lon,des_lat = row.dropoff_longitude, row.dropoff_latitude
             origin,dest = get_origin_destination(G,osmid_to_node_map,ori_lat,ori_lon,des_lat,des_lon)
             req_file.write("{0},{1},{2},{3},{4},{5},{6},{7}\n".format(id,time_str,des_lon,des_lat,ori_lon,ori_lat,int(dest),int(origin)))
             id += 1
@@ -229,12 +254,12 @@ def get_origin_destination(G,osmid_to_node_map,ori_lat,ori_lon,des_lat,des_lon):
     destination = osmid_to_node_map[int(destination)]
     return origin, destination
 
-def update_bus_stops(G,nodes,main_directory,input_directory):
+def update_bus_stops(G,nodes,main_bus_directory,input_directory):
     stops = pd.read_csv(input_directory+"stops.txt")
     osmid_to_node_map = {}
     for _,node in nodes.iterrows():
         osmid_to_node_map[int(node.osmid)] = node.node_id
-    bus_directory = main_directory + "bus/"
+    bus_directory = main_bus_directory + radius_in_km
     create_directory(bus_directory)
     with open(bus_directory+"stop_map.csv", 'a+') as stop_file:
         stop_file.write("stop_id,node_id\n")
@@ -243,11 +268,11 @@ def update_bus_stops(G,nodes,main_directory,input_directory):
                 stop_node = ox.distance.nearest_nodes(G, row.stop_lon, row.stop_lat)
                 if type(stop_node) == list:
                     stop_node = stop_node[0]
-                stop_node = osmid_to_node_map[int(stop_node)]
+                stop_node = int(osmid_to_node_map[int(stop_node)])
                 stop_file.write("{0},{1}\n".format(row.stop_id,stop_node))
 
-def generate_eligible_lines(G,nodes,cut_off,main_directory,input_directory):
-    bus_directory = main_directory + "bus/"
+def generate_eligible_lines(G,nodes,cut_off,main_bus_directory,input_directory):
+    bus_directory = main_bus_directory + radius_in_km
     create_directory(bus_directory)
     feed = gk.read_feed(input_directory, dist_units='km')
     stop_map = pd.read_csv(bus_directory+"stop_map.csv")
@@ -255,10 +280,21 @@ def generate_eligible_lines(G,nodes,cut_off,main_directory,input_directory):
     for _,row in stop_map.iterrows():
         stop_map_dic[row.stop_id] = int(row.node_id)
 
+    selected_day = None
+    for day in feed.get_first_week():
+        year = int(day[:4])
+        month = int(day[4:6])
+        date = int(day[6:])
+        date_time_obj = datetime.datetime(year=year,month=month,day=date)
+        if date_time_obj.weekday() == 0:
+            selected_day = day
+            break
+    # selected_day='20230314'
+    # selected_day="20221128"
     busslines = {}
     for _,row in feed.routes.iterrows():
         route_id = row.route_id
-        timetable = feed.build_route_timetable(route_id, ['20230306'])
+        timetable = feed.build_route_timetable(route_id, [selected_day])
         if timetable.shape[0] > 0:
             busslines[route_id] = {}
             for direction_id in timetable.direction_id.unique():
@@ -295,18 +331,90 @@ def generate_eligible_lines(G,nodes,cut_off,main_directory,input_directory):
                     if closest_distance <= cut_off:
                         output_file.write("{0},{1},{2},{3}\n".format(i,bus_line_name,direction,closest_stop))
 
-main_directory = "chicago/"
-radius = 16000
-city_center = (41.881978735974656, -87.6301110441199)
-G, nodes, edges = osmnx_routing_graph(city_center,radius)
-# print(len(nodes),len(edges))
-# generateMap(G,nodes,edges,main_directory)
-# generateVehicles(nodes,10000,4,main_directory)
-# bus_input_directory = "GTFS"
-# update_bus_stops(G,nodes,main_directory,bus_input_directory)
-# generate_eligible_lines(G,nodes,2000,main_directory,bus_input_directory)
 
-block_file_path = "tl_2010_17_tabblock10/tl_2010_17_tabblock10.shp"
-lodes_file_path = main_directory+"il_od_main_JT00_2019.csv"
-extract_requests_from_lodes_data(radius/1000,city_center,block_file_path,lodes_file_path,main_directory)
-generate_requests(G,nodes,main_directory) #13382
+def generateRequests1(G,nodes,filename,output_file_name):
+
+    DROPOFF_LAT = 'work_loc_lat'
+    DROPOFF_LONG = 'work_loc_lon'
+    PICKUP_LAT = 'home_loc_lat'
+    PICKUP_LONG = 'home_loc_lon'
+    GO_TIME = 'go_time'
+    RETURN_TIME = 'return_time'
+    TRIP_DISTANCE = 'trip_distance'
+    ORIGIN = 'origin'
+    DEST = 'dest'
+
+    data = pd.read_csv(filename,usecols=[GO_TIME,RETURN_TIME, PICKUP_LONG, PICKUP_LAT, DROPOFF_LONG, DROPOFF_LAT])
+    count = data.shape[0]
+
+    print("Trips in selected time interval: {0}".format(count))
+    
+    with open("chattanooga/requests"+output_file_name+".csv", 'a') as f:
+        f.write('id,tpep_pickup_datetime,pickup_longitude,pickup_latitude,dropoff_longitude,dropoff_latitude,origin,dest\n')
+    selected_trips = 0
+    num_processed = 0
+    trip_id = 1
+    node_id_to_osmid = {}
+    for _,node in nodes.iterrows():
+        node_id_to_osmid[int(node.node_id)] = node.osmid
+
+    osmid_to_nodeid = {}
+    for _,node in nodes.iterrows():
+        osmid_to_nodeid[node.osmid] = int(node.node_id)
+
+    for index, row in data.iterrows():
+            print(num_processed, end='\r')
+            num_processed+=1
+            go_time = row[GO_TIME]
+            return_time = row[RETURN_TIME]
+            ori = ox.distance.nearest_nodes(G, row[PICKUP_LONG],row[PICKUP_LAT])
+            des = ox.distance.nearest_nodes(G, row[DROPOFF_LONG], row[DROPOFF_LAT])
+            origin = None
+            destination = None
+            if type(ori) == list:
+                origin = ori[0]
+            else:
+                origin = ori
+            if type(des) == list:    
+                destination = des[0]
+            else:
+                destination = des
+                
+            origin = osmid_to_nodeid[origin]
+            destination = osmid_to_nodeid[destination]
+            if origin != destination:
+                selected_trips+=1
+                with open("chattanooga/requests"+output_file_name+".csv", 'a') as f:
+                    f.write('{0},{1},{2},{3},{4},{5},{6},{7}\n'.format(trip_id,go_time,row[PICKUP_LONG],row[PICKUP_LAT],row[DROPOFF_LONG], row[DROPOFF_LAT],origin,destination))
+                    trip_id+=1
+                    f.write('{0},{1},{2},{3},{4},{5},{6},{7}\n'.format(trip_id,return_time,row[DROPOFF_LONG], row[DROPOFF_LAT],row[PICKUP_LONG],row[PICKUP_LAT],destination,origin))
+                    trip_id+=1
+
+    print("Trips after filtering: {0}".format(selected_trips))
+
+main_directory = "output/"
+radius = 12000 #radius in meters
+radius_in_km = "{0}km/".format(int(radius//1000))
+city_center = (42.36018755809968, -71.05892310513804)
+G, nodes, edges = osmnx_routing_graph(city_center,radius)
+print(len(nodes),len(edges))
+generateMap(G,nodes,edges,main_directory)
+# generateVehicles(nodes,10000,4,main_directory)
+# bus_input_directory = main_directory+ "bus/"
+# update_bus_stops(G,nodes,bus_input_directory,bus_input_directory)
+# generate_eligible_lines(G,nodes,4000,bus_input_directory,bus_input_directory)
+
+# block_file_path = main_directory+"tl_2020_25_tabblock20/tl_2020_25_tabblock20.shp"
+# lodes_file_path = main_directory+"ma_od_main_JT00_2019.csv"
+# extract_requests_from_lodes_data(radius/1000,city_center,block_file_path,lodes_file_path,main_directory)
+generate_requests(G,nodes,main_directory)
+
+# atlanta downtown 33.75508,-84.38869 #15km
+# chicago downtown 41.881978735974656, -87.6301110441199 #16km
+# boston downtown 42.36018755809968, -71.05892310513804 #12km
+# houston downtown 29.74235,-95.37086 #12km
+# la downtown 34.04529,-118.24996 #12km #11771
+# generateRequests1(G,nodes,'../taxi-public-transit-integration/generate_data/lodes_combinations.csv',"requests_23_6_23_new")
+
+#5839
+#6897
