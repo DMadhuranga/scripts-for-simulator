@@ -399,14 +399,14 @@ city_center = (42.36018755809968, -71.05892310513804)
 G, nodes, edges = osmnx_routing_graph(city_center,radius)
 print(len(nodes),len(edges))
 generateMap(G,nodes,edges,main_directory)
-# generateVehicles(nodes,10000,4,main_directory)
-# bus_input_directory = main_directory+ "bus/"
-# update_bus_stops(G,nodes,bus_input_directory,bus_input_directory)
-# generate_eligible_lines(G,nodes,4000,bus_input_directory,bus_input_directory)
+generateVehicles(nodes,10000,4,main_directory)
+bus_input_directory = main_directory+ "bus/"
+update_bus_stops(G,nodes,bus_input_directory,bus_input_directory)
+generate_eligible_lines(G,nodes,4000,bus_input_directory,bus_input_directory)
 
-# block_file_path = main_directory+"tl_2020_25_tabblock20/tl_2020_25_tabblock20.shp"
-# lodes_file_path = main_directory+"ma_od_main_JT00_2019.csv"
-# extract_requests_from_lodes_data(radius/1000,city_center,block_file_path,lodes_file_path,main_directory)
+block_file_path = main_directory+"tl_2020_25_tabblock20/tl_2020_25_tabblock20.shp"
+lodes_file_path = main_directory+"ma_od_main_JT00_2019.csv"
+extract_requests_from_lodes_data(radius/1000,city_center,block_file_path,lodes_file_path,main_directory)
 generate_requests(G,nodes,main_directory)
 
 # atlanta downtown 33.75508,-84.38869 #15km
@@ -415,6 +415,3 @@ generate_requests(G,nodes,main_directory)
 # houston downtown 29.74235,-95.37086 #12km
 # la downtown 34.04529,-118.24996 #12km #11771
 # generateRequests1(G,nodes,'../taxi-public-transit-integration/generate_data/lodes_combinations.csv',"requests_23_6_23_new")
-
-#5839
-#6897
